@@ -1,0 +1,145 @@
+#!groovy
+
+properties([ parameters([
+  string( name: 'SCRIPTS_REPO', defaultValue: 'Scripts'),
+  string( name: 'CHEF_REPO', defaultValue: 'Chef'), 
+  string( name: 'CRED_ID', defaultValue: ''),
+  string( name: 'DEVOPS_CRED_ID', defaultValue: ''),
+  password( name: 'AZ_ACCESS_KEY', defaultValue: ''),
+  string( name: 'AZ_STORAGE_ACCOUNT_NAME', defaultValue: ''),
+  string( name: 'AZ_CONTAINER_NAME', defaultValue: ''),
+  string( name: 'AZ_BLOB_KEY', defaultValue: ''),
+  string( name: 'COMMIT_ID', defaultValue: '')
+]), pipelineTriggers([
+    [$class: 'GenericTrigger',
+        genericVariables: [
+            [expressionType: 'JSONPath', key: 'ASSET', value: '$.asset'],
+            [expressionType: 'JSONPath', key: 'ACTION', value: '$.action'],
+            [expressionType: 'JSONPath', key: 'REPONAME', value: '$.repositoryName'],
+            [expressionType: 'JSONPath', key: 'NODEID', value: '$.nodeId']
+            ],
+            genericRequestVariables: [],
+            genericHeaderVariables: [],
+            regexpFilterText: '',
+            regexpFilterExpression: ''
+        ]
+    ])
+])
+
+node{
+    stage('Inititalize'){
+        sh'''
+            echo ASSET_name: $ASSET_name
+            echo ACTION: $ACTION
+            echo REPONAME: $REPONAME
+            echo ASSET_id: $ASSET_id
+            echo NODEID: $NODEID
+        '''
+    }
+    stage('Build Repos'){
+        if(env.ACTION == 'CREATED' ||  env.ACTION == 'UPDATED'){
+            dir("Chef"){
+                deleteDir()
+                git url: "https://github.com/project/DevOps/_git/Chef", credentialsId: 'NewUser'
+
+                sh 'git config --global credential.helper cache'
+                sh 'git config --global push.default simple'
+            }
+        }
+    }
+    stage('Get Webhook data'){
+        if(env.ACTION == 'CREATED'){
+            sh '''#!/bin/bash
+                
+                #Split FILENAME into Array
+                export file_name="$ASSET_name"
+                IFS="."
+                set -- $file_name
+                file_array=($@)
+                export BUILDNUM=${file_array[1]}
+                export BUILDSITE=${file_array[0]}
+                unset IFS
+
+                cat $WORKSPACE/Chef/Environments/dev/dev.json
+
+                echo $BUILDSITE
+                echo $BUILDNUM
+
+                python $WORKSPACE/Chef/Scripts/update_buildnum.py $WORKSPACE/Chef/Environments/dev/dev.json $BUILDSITE $BUILDNUM ""
+
+                cat $WORKSPACE/Chef/Environments/dev/dev.json
+
+            '''
+        }
+        else if(env.ACTION == 'UPDATED'){
+            sh '''#!/bin/bash
+                
+                #Split FILENAME into Array
+                export file_name="$ASSET_name"
+                IFS="."
+                set -- $file_name
+                file_array=($@)
+                export BUILDNUM=${file_array[1]}
+                export BUILDSITE=${file_array[0]}
+                unset IFS
+
+                cat $WORKSPACE/Chef/Environments/dev/dev.json
+
+                echo $BUILDSITE
+                echo $BUILDNUM
+
+                #python $WORKSPACE/Chef/Scripts/update_buildnum.py $WORKSPACE/Chef/Environments/dev/dev.json $BUILDSITE $BUILDNUM ""
+
+                cat $WORKSPACE/Chef/Environments/dev/dev.json
+
+            '''
+        }
+    }
+    stage('Commit New Version'){
+
+        if(env.ACTION == 'CREATED'){
+            sh '''#!/bin/bash
+
+                export GIT_REPO_URL="github.com/DevOps/_git/Chef"
+                export GIT_USERNAME="admsgjune"
+
+                cd $WORKSPACE/Chef
+
+                pwd
+
+                git config user.email "admin@none.com"
+                git config user.name "$GIT_USERNAME"
+                #git config --global push.default simple
+
+                git add $WORKSPACE/Chef/Environments/dev/dev.json
+                git commit -m "Update Build Number from Nexus"
+                git  push http://$GIT_REPO_URL HEAD:master
+                
+                echo "Git Sync Complete."
+            '''
+        }
+    }
+    stage('Update Azure Table'){
+        sh '''#!/bin/bash
+
+            #Split FILENAME into Array
+            export file_name="$ASSET_name"
+            IFS="."
+            set -- $file_name
+            file_array=($@)
+            export BUILDNUM=${file_array[1]}
+            export BUILDSITE=${file_array[0]}
+            unset IFS
+
+            export AZURE_STORAGE_ACCESS_KEY=${PW5}
+            export AZURE_STORAGE_ACCOUNT=esusweststorage
+
+            # If job matches existing job then merge if not then create a new item
+            if az storage entity show --table-name TriggeredJobs --partition-key $ASSET_id --row-key $ASSET_name | grep -E "$ASSET_id|$ASSET_name" ; then 
+                az storage entity merge -t TriggeredJobs -e PartitionKey=$ASSET_id RowKey=$ASSET_name ASSETID=$ASSET_id FILENAME=$ASSET_name REPONAME=$REPONAME BUILDNUM=$BUILDNUM BUILDSITE=$BUILDSITE ACTION=$ACTION
+            else
+                az storage entity insert -t TriggeredJobs -e PartitionKey=$ASSET_id RowKey=$ASSET_name ASSETID=$ASSET_id FILENAME=$ASSET_name REPONAME=$REPONAME BUILDNUM=$BUILDNUM BUILDSITE=$BUILDSITE ACTION=$ACTION
+            fi
+        '''
+    }
+}

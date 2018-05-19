@@ -1,0 +1,69 @@
+#!groovy
+
+properties([ parameters([
+  string( name: 'SCRIPTS_REPO', defaultValue: ''),
+  string( name: 'CHEF_REPO', defaultValue: ''),
+  string( name: 'CHEF_ENV', defaultValue: ''),
+  string( name: 'SERVER_URL', defaultValue: ''),
+  string( name: 'SERVER_USERNAME', defaultValue: '')
+]), pipelineTriggers([])])
+
+node{
+    stage('Build Repos'){
+        dir(SCRIPTS_REPO){
+            git url: "https://name.github.com/DevOps/_git/$SCRIPTS_REPO", credentialsId: '<credID>'
+        }
+        dir(CHEF_REPO){
+            git url: "https://name.github.com/DevOps/_git/$CHEF_REPO", credentialsId: '<credID>'
+        }
+    }
+    stage('Update Environment'){
+        if(CHEF_ENV?.trim()){
+            sh '''
+                echo $CHEF_ENV
+                knife environment from file $WORKSPACE/$CHEF_REPO/Environments/$CHEF_ENV/$CHEF_ENV.json --server-url $SERVER_URL
+            '''
+        }
+        else{
+            sh '''
+                echo "No Env String"
+            '''
+        }
+    }
+    stage("Run Chef Client"){
+        if(CHEF_ENV?.trim()){
+            withCredentials([string(credentialsId: "LOCAL_ADMIN_PW", variable: 'PW2')]) {
+                sh '''#!/bin/bash
+                    
+                    cd $WORKSPACE/$SCRIPTS_REPO
+
+                    computers=$(knife search node "chef_environment:$CHEF_ENV" -s $SERVER_URL -m -Fj)
+
+                    results=$(echo $computers | jq '.results')
+
+                    if [ $results -gt 0 ]; then
+                    
+                        let results=results-1
+
+                        array=()
+
+                        for i in $(seq 0 $results); do
+                            ips=$(echo $computers | jq ".rows[$i].automatic.ipaddress" | tr -d '"')
+                            array[$i]=$ips
+                        done
+
+                        for p in ${array[@]}; do
+                            echo $p
+                            python run-chefclient.py $SERVER_USERNAME ${PW2} $p
+                        done
+                    fi
+                '''
+            }
+        }
+        else{
+            sh '''
+                echo "No Env String"
+            '''
+        }
+    }
+}

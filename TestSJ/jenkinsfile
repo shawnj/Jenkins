@@ -1,0 +1,66 @@
+#!groovy
+
+properties([ parameters([
+  string( name: 'REPONAME', defaultValue: ''),
+  string( name: 'ACTION', defaultValue: ''),
+  string( name: 'ASSET', defaultValue: ''),
+  string( name: 'GIT_REPO_URL', defaultValue: ''),
+  string( name: 'GIT_REPO', defaultValue: ''),
+  string( name: 'REPO_FOLDER', defaultValue: ''),
+  string( name: 'CRED_ID', defaultValue: ''),
+  string( name: 'GIT_USERNAME', defaultValue: '')
+]), pipelineTriggers([])
+])
+
+node{
+    stage('Inititalize'){
+        sh'''
+            echo ASSET: $ASSET
+            echo ACTION: $ACTION
+            echo REPONAME: $REPONAME
+        '''
+    }
+    stage('Build Repos'){
+        dir(CHEF_REPO){
+            deleteDir()
+            git url: "https://$GIT_REPO_URL"
+        }
+        dir(GIT_REPO){
+            deleteDir()
+            git url: "https://$GIT_REPO_URL"
+
+            sh 'git config --global credential.helper cache'
+            sh 'git config --global push.default simple'
+        }
+    }
+    stage('Increase Build Num'){
+        sh '''#!/bin/bash
+            cd $WORKSPACE/$GIT_REPO/cookbooks/$REPO_FOLDER
+
+            pwd
+
+            echo $(cat VERSION)
+
+            python $WORKSPACE/$GIT_REPO/scripts/update_version.py .
+
+            echo $(cat VERSION) 
+
+        '''
+    }
+    stage('Commit New Version'){
+        sh '''#!/bin/bash
+            cd $WORKSPACE/$GIT_REPO
+            pwd
+
+            git config user.email "$GIT_USERNAME@none.com"
+            git config user.name "$GIT_USERNAME"
+            git config --global push.default simple
+
+            git add $WORKSPACE/$GIT_REPO/cookbooks/$REPO_FOLDER/VERSION
+            git commit -m 'Update Version'
+            git push https://$GIT_REPO_URL HEAD:master
+            
+            echo "Git Sync Complete."
+        '''
+    }
+}

@@ -1,0 +1,216 @@
+#!groovy
+
+properties([ parameters([
+  string( name: 'SCRIPTS_REPO', defaultValue: ''),
+  string( name: 'MODULES_REPO', defaultValue: ''),
+  string( name: 'TERRAFORM_REPO', defaultValue: ''),
+  string( name: 'TERRAFORM_FOLDER', defaultValue: ''),
+  string( name: 'CRED_ID', defaultValue: ''),
+  string( name: 'DEVOPS_CRED_ID', defaultValue: ''),
+  string( name: 'AZ_CRED_ID', defaultValue: ''),
+  password( name: 'ADMIN_PW', defaultValue: ''),
+  password( name: 'AZ_ACCESS_KEY', defaultValue: ''),
+  string( name: 'AZ_STORAGE_ACCOUNT_NAME', defaultValue: ''),
+  string( name: 'AZ_CONTAINER_NAME', defaultValue: ''),
+  string( name: 'AZ_BLOB_KEY', defaultValue: ''),
+  string( name: 'COMMIT_ID', defaultValue: ''),
+  string( name: 'VM_NAME', defaultValue: ''),
+  string( name: 'AZ_SUBSCRIPTION_ID', defaultValue: ''),
+  string( name: 'AZ_CLIENT_ID', defaultValue: ''),
+  string( name: 'AZ_TENANT_ID', defaultValue: ''),
+  password( name: 'PRIVATE_KEY', defaultValue: '')
+]), pipelineTriggers([])])
+
+node{
+    stage('Build Repos'){
+        dir(SCRIPTS_REPO){
+            git url: "http://name.github.com/DevOps/_git/$SCRIPTS_REPO", credentialsId: '<credName>'
+        }
+        dir(MODULES_REPO){
+            git url: "http://name.github.com/Terraform/_git/$MODULES_REPO", credentialsId: '<credName>'
+        }
+
+        dir(TERRAFORM_REPO){   
+            deleteDir()
+            git url: "http://name.github.com/Terraform/_git/$TERRAFORM_REPO", credentialsId: '<credName>'
+        }
+    }
+    stage('Copy TF Folder'){
+        sh '''#!/bin/bash
+
+            cp -r $WORKSPACE/$TERRAFORM_REPO/$TERRAFORM_FOLDER $WORKSPACE/$TERRAFORM_REPO/$COMMIT_ID
+            
+        '''
+    }
+    stage('Terraform Init'){
+        withCredentials([string(credentialsId: "<credName>", variable: 'PW1')]) {
+            sh '''#!/bin/sh
+
+                cd $WORKSPACE/$TERRAFORM_REPO/$COMMIT_ID
+                
+                if [ -d ".terraform" ]; 
+                    then rm -r .terraform;
+                fi
+
+                export TF_VAR_az_access_key=$AZ_ACCESS_KEY
+                export TF_VAR_az_storage_account_name=$AZ_STORAGE_ACCOUNT_NAME
+                export TF_VAR_az_blob_key=$AZ_BLOB_KEY
+                export TF_VAR_az_container_name=$AZ_CONTAINER_NAME
+
+
+                terraform init \
+                    -backend-config "access_key=$AZ_ACCESS_KEY" \
+                    -backend-config "storage_account_name=$AZ_STORAGE_ACCOUNT_NAME" \
+                    -backend-config "container_name=$AZ_CONTAINER_NAME" \
+                    -backend-config "key=$AZ_BLOB_KEY"
+            '''
+        }
+
+    }
+    stage("Terraform plan"){
+        withCredentials([string(credentialsId: "<credName>", variable: 'PW1')]) {
+            sh '''#!/bin/sh
+
+                cd $WORKSPACE/$TERRAFORM_REPO/$COMMIT_ID
+
+                export TF_VAR_az_access_key=$AZ_ACCESS_KEY
+                export TF_VAR_az_storage_account_name=$AZ_STORAGE_ACCOUNT_NAME
+                export TF_VAR_vm_name=$VM_NAME-$COMMIT_ID
+                export TF_VAR_az_blob_key=$AZ_BLOB_KEY
+                export TF_VAR_az_container_name=$AZ_CONTAINER_NAME
+                export TF_VAR_admin_pw=$ADMIN_PW
+                export TF_VAR_client_secret=${PW5}
+                export TF_VAR_client_id=$AZ_CLIENT_ID
+                export TF_VAR_tenant_id=$AZ_TENANT_ID
+                export TF_VAR_subscription_id=$AZ_SUBSCRIPTION_ID
+
+                terraform plan  -input=false 
+
+            '''
+        }
+    }
+    stage('Terraform Apply'){
+        withCredentials([string(credentialsId: "<credName>", variable: 'PW1')]) {
+            sh '''#!/bin/bash
+                
+                cd $WORKSPACE/$TERRAFORM_REPO/$COMMIT_ID
+
+                export TF_VAR_az_access_key=$AZ_ACCESS_KEY
+                export TF_VAR_az_storage_account_name=$AZ_STORAGE_ACCOUNT_NAME
+                export TF_VAR_vm_name=$VM_NAME-$COMMIT_ID
+                export TF_VAR_az_blob_key=$AZ_BLOB_KEY
+                export TF_VAR_az_container_name=$AZ_CONTAINER_NAME
+                export TF_VAR_admin_pw=$ADMIN_PW
+                export TF_VAR_client_secret=${PW5}
+                export TF_VAR_client_id=$AZ_CLIENT_ID
+                export TF_VAR_tenant_id=$AZ_TENANT_ID
+                export TF_VAR_subscription_id=$AZ_SUBSCRIPTION_ID
+
+                terraform apply
+
+            '''
+        }
+    }
+    stage('Results and Update Azure Table'){
+        withCredentials([string(credentialsId: "<credName>", variable: 'PW1')]) {
+            sh '''#!/bin/bash
+                
+                cd $WORKSPACE/$TERRAFORM_REPO/$COMMIT_ID
+
+                export TF_VAR_vm_name=$COMMIT_ID
+                export TF_VAR_az_blob_key=$TF_VAR_vm_name.terraform.tfstate
+
+                echo "State File: $TF_VAR_az_blob_key"
+
+                export AZURE_STORAGE_ACCESS_KEY=$AZ_ACCESS_KEY
+                export AZURE_STORAGE_ACCOUNT=$AZ_STORAGE_ACCOUNT_NAME
+
+                export TF_OUTPUT_IP=$(terraform output ip)
+                export TF_OUTPUT_VMNAME=$(terraform output vmName)
+                export TF_OUTPUT_PUBLICIP=$(terraform output publicip)
+                
+                # If job matches existing job then merge if not then create a new item
+                if az storage entity show --table-name <tableName> --partition-key $COMMIT_ID --row-key $TF_VAR_az_blob_key | grep -E "$TF_VAR_az_blob_key|$TF_VAR_vm_name" ; then 
+                    az storage entity merge -t <tableName>-e PartitionKey=$COMMIT_ID RowKey=$TF_VAR_az_blob_key StorageAccount=$AZ_STORAGE_ACCOUNT_NAME IPADDRESS=$TF_OUTPUT_IP BLOB_KEY=$TF_VAR_az_blob_key PUBLICIP=$TF_OUTPUT_PUBLICIP STATUS="ACTIVE" BUILDNUM=$BUILDNUM BUILDSITE=$BUILDSITE SERVERNAME=$TF_OUTPUT_VMNAME NOTES=$TF_OUTPUT_NOTES
+                else
+                    az storage entity insert -t <tableName> -e PartitionKey=$COMMIT_ID RowKey=$TF_VAR_az_blob_key StorageAccount=$AZ_STORAGE_ACCOUNT_NAME IPADDRESS=$TF_OUTPUT_IP BLOB_KEY=$TF_VAR_az_blob_key PUBLICIP=$TF_OUTPUT_PUBLICIP STATUS="ACTIVE" BUILDNUM=$BUILDNUM BUILDSITE=$BUILDSITE SERVERNAME=$TF_OUTPUT_VMNAME NOTES=$TF_OUTPUT_NOTES
+                fi
+            '''
+        }
+    }
+    stage('Pause'){
+        sh'''#!/bin/bash
+
+            sleep 30
+
+        '''
+    }
+    stage("Terraform Plan Destroy"){
+        withCredentials([string(credentialsId: "<credName>", variable: 'PW1')]) {
+            sh '''#!/bin/bash
+
+                cd $WORKSPACE/$TERRAFORM_REPO/$COMMIT_ID
+
+                export TF_VAR_az_access_key=$AZ_ACCESS_KEY
+                export TF_VAR_az_storage_account_name=$AZ_STORAGE_ACCOUNT_NAME
+                export TF_VAR_az_container_name=$AZ_CONTAINER_NAME
+                export TF_VAR_admin_pw=$ADMIN_PW
+                export TF_VAR_vm_name=$VM_NAME-$COMMIT_ID
+                export TF_VAR_az_blob_key=$AZ_BLOB_KEY
+                export TF_VAR_client_secret=${PW5}
+                export TF_VAR_client_id=$AZ_CLIENT_ID
+                export TF_VAR_tenant_id=$AZ_TENANT_ID
+                export TF_VAR_subscription_id=$AZ_SUBSCRIPTION_ID
+
+                terraform plan -destroy
+
+            '''
+        }
+    }
+    stage('Terraform Destroy'){
+        withCredentials([string(credentialsId: "<credName>", variable: 'PW1')]) {
+            sh '''#!/bin/bash
+
+                cd $WORKSPACE/$TERRAFORM_REPO/$COMMIT_ID
+                
+                pwd
+
+                export TF_VAR_az_access_key=$AZ_ACCESS_KEY
+                export TF_VAR_az_storage_account_name=$AZ_STORAGE_ACCOUNT_NAME
+                export TF_VAR_az_container_name=$AZ_CONTAINER_NAME
+                export TF_VAR_admin_pw=$ADMIN_PW
+                export TF_VAR_vm_name=$VM_NAME-$COMMIT_ID
+                export TF_VAR_az_blob_key=$AZ_BLOB_KEY
+                export TF_VAR_client_secret=${PW5}
+                export TF_VAR_client_id=$AZ_CLIENT_ID
+                export TF_VAR_tenant_id=$AZ_TENANT_ID
+                export TF_VAR_subscription_id=$AZ_SUBSCRIPTION_ID
+
+                echo "Destroying..."
+
+                terraform destroy -force 
+
+            '''
+        }
+    }
+    stage('Results and Update Azure Table'){
+        withCredentials([string(credentialsId: "<credName>", variable: 'PW1')]) {
+            sh '''#!/bin/bash
+
+                cd $WORKSPACE/$TERRAFORM_REPO/$COMMIT_ID
+
+                export TF_VAR_vm_name=$COMMIT_ID
+                export TF_VAR_az_blob_key=$TF_VAR_vm_name.terraform.tfstate
+
+                echo "State File: $TF_VAR_az_blob_key"
+
+                export AZURE_STORAGE_ACCESS_KEY=$AZ_ACCESS_KEY
+                export AZURE_STORAGE_ACCOUNT=$AZ_STORAGE_ACCOUNT_NAME
+                
+                # Set the Table entry to "Destroyed"
+                az storage entity merge -t <tablename> -e PartitionKey=$COMMIT_ID RowKey=$TF_VAR_az_blob_key STATUS="DESTROYED" 
+
+            '''
+        }
+    }
+}
