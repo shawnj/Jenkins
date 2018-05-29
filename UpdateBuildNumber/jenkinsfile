@@ -1,0 +1,69 @@
+#!groovy
+
+properties([ parameters([
+  string( name: 'SCRIPTS_REPO', defaultValue: 'Scripts'),
+  string( name: 'CHEF_REPO', defaultValue: 'Chef'),
+  string( name: 'GIT_USERNAME', defaultValue: ''),
+  string( name: 'BUILDSITE', defaultValue: ''),
+  string( name: 'BUILDNUM', defaultValue: '')
+]), pipelineTriggers([])])
+
+node{
+    withCredentials([string(credentialsId: "ACCESS_KEY", variable: 'PW5')]) {
+        stage('Inititalize'){
+            sh'''
+                echo BUILDSITE: $BUILDSITE
+                echo BUILDNUM: $BUILDNUM
+            '''
+        }
+        stage('Build Repos'){
+            dir("Chef"){
+                deleteDir()
+                git url: "https://github.com/Test/DevOps/chef.git", credentialsId: 'Admin'
+
+                sh 'git config --global credential.helper cache'
+                sh 'git config --global push.default simple'
+            }
+        }
+        stage('Update Build Num'){
+            sh '''#!/bin/bash
+                
+                #cat $WORKSPACE/Chef/APPVERSIONS/$BUILDSITE
+
+                echo $BUILDSITE
+                echo $BUILDNUM
+                
+                # Update text file with build num for 
+                python $WORKSPACE/Test/Scripts/update_bld_version_file.py $WORKSPACE/Chef/APPVERSIONS $BUILDSITE $BUILDNUM
+
+                echo "Update Build Num: $BUILDNUM Complete"
+
+            '''
+        }
+        stage('Commit New Version'){
+            sh '''#!/bin/bash
+
+                export GIT_REPO_URL="github.com/Test/DevOps/chef.git"
+                export GIT_USERNAME="admin"
+                export UBUILDSITE=$(echo $BUILDSITE | tr a-z A-Z)
+
+                echo $UBUILDSITE
+                
+                cd $WORKSPACE/Test
+
+                pwd
+
+                cat $WORKSPACE/Test/APPVERSIONS/$UBUILDSITE
+
+                git config user.email "admin@none.com"
+                git config user.name "$GIT_USERNAME"
+
+                git add $WORKSPACE/Test/APPVERSIONS/$UBUILDSITE
+                git commit -m "Update Build Number for $UBUILDSITE.$BUILDNUM"
+                git push http://$GIT_REPO_URL HEAD:master
+                
+                echo "Git Sync Complete."
+            '''
+        }
+    }
+}

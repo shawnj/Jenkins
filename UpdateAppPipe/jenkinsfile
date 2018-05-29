@@ -1,0 +1,74 @@
+#!groovy
+
+properties([ parameters([
+  string( name: 'CHEF_REPO', defaultValue: ''),
+  string( name: 'CHEF_ENV', defaultValue: ''),
+  string( name: 'BUILDSITE', defaultValue: ''),
+  string( name: 'BUILDNUM', defaultValue: ''),
+  string( name: 'GIT_USERNAME', defaultValue: ''),
+  string( name: 'SERVER_URL', defaultValue: ''),
+  string( name: 'SERVER_USERNAME', defaultValue: '.\\admin')
+]), pipelineTriggers([])])
+
+node{
+    stage('Inititalize'){
+        sh'''
+            echo BUILDSITE: $BUILDSITE
+            echo BUILDNUM: $BUILDNUM
+            echo CHEF ENV: $CHEF_ENV
+            echo SERVER URL: $SERVER_URL
+        '''
+    }
+    stage('Build Repos'){
+        dir(CHEF_REPO){
+            deleteDir()
+            git url: "https://github.com/Test/DevOps/$CHEF_REPO.git", credentialsId: 'Admin'
+
+            sh 'git config --global credential.helper cache'
+            sh 'git config --global push.default simple'
+        }
+    }
+    stage('Update Build Number'){
+        if(CHEF_ENV?.trim()){
+            sh '''
+                echo $CHEF_ENV
+                echo BUILDSITE: $BUILDSITE
+
+                export BUILDNUM=$(cat $WORKSPACE/$CHEF_REPO/APPVERSIONS/$BUILDSITE)
+                echo BUILDNUM: $BUILDNUM
+
+                python $WORKSPACE/$CHEF_REPO/Scripts/update_buildnum.py $WORKSPACE/$CHEF_REPO/Environments/$CHEF_ENV/$CHEF_ENV.json $BUILDSITE $BUILDNUM ""
+
+            '''
+        }
+        else{
+            sh '''
+                echo "No Env String"
+            '''
+        }
+    }
+    stage('Commit New Env Version'){
+        if(CHEF_ENV?.trim()){
+            sh '''#!/bin/bash
+
+                export GIT_REPO_URL="github.com/Test/DevOps/$CHEF_REPO.git"
+                export GIT_USERNAME="admin"
+                
+                cd $WORKSPACE/$CHEF_REPO
+
+                pwd
+
+                cat $WORKSPACE/$CHEF_REPO/Environments/$CHEF_ENV/$CHEF_ENV.json
+
+                git config user.email "admin@none.com"
+                git config user.name "$GIT_USERNAME"
+
+                git add $WORKSPACE/$CHEF_REPO/Environments/$CHEF_ENV/$CHEF_ENV.json
+                git commit -m "Update ENV File for $CHEF_ENV"
+                git push https://$GIT_REPO_URL HEAD:master
+                
+                echo "Git Sync Complete."
+            '''
+        }
+    }
+}
