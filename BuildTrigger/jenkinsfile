@@ -1,0 +1,67 @@
+#!groovy
+
+properties([ pipelineTriggers([
+    [$class: 'GenericTrigger',
+        genericVariables: [
+            [expressionType: 'JSONPath', key: 'ASSET', value: '$.asset'],
+            [expressionType: 'JSONPath', key: 'ACTION', value: '$.action'],
+            [expressionType: 'JSONPath', key: 'REPONAME', value: '$.repositoryName']
+            ],
+            genericRequestVariables: [],
+            genericHeaderVariables: [],
+            regexpFilterText: '',
+            regexpFilterExpression: ''
+        ]
+    ])
+])
+
+node{
+    withCredentials([string(credentialsId: "new-token", variable: 'PW1'),string(credentialsId: "NEW_KEY", variable: 'PW5')]) {
+        stage('Inititalize'){
+            sh'''
+                echo ASSET_name: $ASSET_name
+                echo ACTION: $ACTION
+                echo REPONAME: $REPONAME
+                echo ASSET_id: $ASSET_id
+                echo NODEID: $NODEID
+            '''
+        }
+        stage("Get App Name and Start TFS BUILD"){
+            if(env.ACTION == 'CREATED'){
+                //https://gist.github.com/Faheetah/e11bd0315c34ed32e681616e41279ef4
+                //def json=$/"{ \\\"definition\": { \"id\": 64 }}"/$
+
+                sh '''#!/bin/bash
+
+                    #Split FILENAME into Array
+                    export file_name="$ASSET_name"
+                    function join { local IFS="$1"; shift; echo "$*"; }
+                    IFS="."
+                    set -- $file_name
+                    file_array=($@)
+                    LEN=${#file_array[@]}
+                    export BUILDSITE=${file_array[0]}
+                    TMPNUM=(${file_array[@]:1:$((LEN-2))})
+                    unset IFS
+                    export BUILDNUM=$(join . ${TMPNUM[@]})
+
+                    if [ "$BUILDSITE" = "Admin" ]; then
+                        export JSON='{\"definition\":{\"id\":65},\"parameters\":\"{\\\"ACTION\\\":\\\"'$ACTION'\\\",\\\"BUILDNUM\\\":\\\"'$BUILDNUM'\\\",\\\"BUILDSITE\\\":\\\"'$BUILDSITE'\\\",\\\"FILENAME\\\":\\\"'$ASSET_name'\\\",\\\"REPONAME\\\":\\\"'$REPONAME'\\\"}\"}'   
+                    elif [ "$BUILDSITE" = "TEST" ]; then
+                        export JSON='{\"definition\":{\"id\":73},\"parameters\":\"{\\\"ACTION\\\":\\\"'$ACTION'\\\",\\\"BUILDNUM\\\":\\\"'$BUILDNUM'\\\",\\\"BUILDSITE\\\":\\\"'$BUILDSITE'\\\",\\\"FILENAME\\\":\\\"'$ASSET_name'\\\",\\\"REPONAME\\\":\\\"'$REPONAME'\\\"}\"}'   
+                    elif [ "$BUILDSITE" = "TEST2" ]; then
+                        export JSON='{\"definition\":{\"id\":74},\"parameters\":\"{\\\"ACTION\\\":\\\"'$ACTION'\\\",\\\"BUILDNUM\\\":\\\"'$BUILDNUM'\\\",\\\"BUILDSITE\\\":\\\"'$BUILDSITE'\\\",\\\"FILENAME\\\":\\\"'$ASSET_name'\\\",\\\"REPONAME\\\":\\\"'$REPONAME'\\\"}\"}'   
+                    elif [ "$BUILDSITE" = "TEST3" ]; then
+                        export JSON='{\"definition\":{\"id\":79},\"parameters\":\"{\\\"ACTION\\\":\\\"'$ACTION'\\\",\\\"BUILDNUM\\\":\\\"'$BUILDNUM'\\\",\\\"BUILDSITE\\\":\\\"'$BUILDSITE'\\\",\\\"FILENAME\\\":\\\"'$ASSET_name'\\\",\\\"REPONAME\\\":\\\"'$REPONAME'\\\"}\"}'   
+                    else
+                        export JSON='{}'
+                    fi
+                    
+                    echo $JSON
+
+                    curl -v 'https://tfs.excample.com/_apis/build/builds?api-version=2.0' -H 'Content-Type: application/json' -u admuser:${PW1} --data $JSON
+                '''
+            }
+        }
+    }
+}
